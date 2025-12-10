@@ -13,9 +13,10 @@ It is recommended to organize your folders as follows:
 
 ```text
 MLX_z-image/
-├── Z-Image-Turbo-MLX-4bit/        # MLX Quantized Weights (Download here)
-├── Z-Image-Turbo/                 # Original PyTorch Model (Download here)
+├── Z-Image-Turbo-MLX-4bit/        # MLX Quantized Weights 
+├── Z-Image-Turbo/                 # Original PyTorch Model 
 ├── run.py                         # Inference Script
+├── mlx_z_image.py                 # MLX converted transformer
 ├── convert.py                     # Script to convert PyTorch weights to MLX
 └── quantize.py                    # Script to quantize FP16 model to 4-bit
 ````
@@ -43,7 +44,7 @@ pip install -r requirements.txt
 
 To run the model, you need two things:
 
-1.  **Z-Image-Turbo-MLX-4bit**: The converted transformer model (Quantized).
+1.  **Z-Image-Turbo-MLX-4bit**: The converted transformer model (4bit_quantized).
 2.  **Z-Image-Turbo**: The original VAE, Text Encoder, and Scheduler.
 
 ### 1\. Download MLX Weights (Quantized)
