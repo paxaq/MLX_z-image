@@ -26,7 +26,7 @@ MLX_z-image/
 ### 1\. Clone the repository
 
 ```bash
-git clone [https://github.com/uqer1244/MLX_z-image.git](https://github.com/uqer1244/MLX_z-image.git)
+git clone https://github.com/uqer1244/MLX_z-image.git
 cd MLX_z-image
 ```
 
