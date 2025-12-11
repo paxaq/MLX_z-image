@@ -39,9 +39,9 @@ def map_key_and_convert(key, tensor):
 
 def main():
     parser = argparse.ArgumentParser(description="Convert Z-Image-Turbo weights to MLX format")
-    parser.add_argument("--model_id", type=str, default="Z-Image-Turbo/Z-Image-Turbo",
+    parser.add_argument("--model_id", type=str, default="Tongyi-MAI/Z-Image-Turbo",
                         help="HuggingFace Model ID or local path")
-    parser.add_argument("--dest_path", type=str, default="mlx_model", help="Directory to save MLX weights")
+    parser.add_argument("--dest_path", type=str, default="Z-Image-Turbo", help="Directory to save MLX weights")
     args = parser.parse_args()
 
     print(f"🚀 Starting Conversion: {args.model_id} -> MLX FP16")
