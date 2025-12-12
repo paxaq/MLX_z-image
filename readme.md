@@ -27,11 +27,10 @@ Inference tests were conducted on Apple Silicon devices using **native MLX** wit
 
 - **Resolution**: 1024x1024
 - **Steps**: 5 (Turbo)
-- **Batch Size**: 1
 
 | Device     | RAM  | Total Time | Denoise Time (MLX) | Time per Step |
 |:-----------|:-----|:-----------|:-------------------|:--------------|
-| **M3 Pro** | 18GB | ~ 182.17 s | 95.48 s            | 19.097 s/Step |
+| **M3 Pro** | 18GB | ~ 125 s    | 95.48 s            | 19.097 s/Step |
 
 
 ### Gallary
