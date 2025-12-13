@@ -1,83 +1,80 @@
 import argparse
 import os
 import json
-import torch
+import torch  # torch import 필수
 import mlx.core as mx
-import mlx.nn as nn
-import mlx.utils  # utils 추가
+from safetensors.torch import load_file as load_pt_file
 import numpy as np
-from transformers import AutoModel
-from mlx_text_encoder import TextEncoderMLX
 
 
 def main():
-    # 경로 설정
-    src_path = "Z-Image-Turbo/text_encoder"
-    dest_path = "Z-Image-Turbo-MLX-TextEncoder"
+    parser = argparse.ArgumentParser(description="Convert Sharded Text Encoder to MLX (BF16)")
+    # 기본값에 언더바(_) 적용
+    parser.add_argument("--src_path", type=str, default="Z-Image-Turbo/text_encoder",
+                        help="Path to PyTorch model folder")
+    parser.add_argument("--dest_path", type=str, default="Z-Image-Turbo-MLX-TextEncoder-BF16", help="Output path")
+    args = parser.parse_args()
 
-    print(f"🚀 Starting Conversion: {src_path} -> {dest_path}")
+    print(f"🚀 Starting Low-Memory Conversion: {args.src_path} -> {args.dest_path}")
+    os.makedirs(args.dest_path, exist_ok=True)
 
-    if not os.path.exists(dest_path):
-        os.makedirs(dest_path)
+    # 1. Index 파일 로드
+    index_path = os.path.join(args.src_path, "model.safetensors.index.json")
+    if not os.path.exists(index_path):
+        print(f"❌ Error: '{index_path}' not found.")
+        return
 
-    # 1. Config 로드
-    config_src = os.path.join(src_path, "config.json")
+    with open(index_path, "r") as f:
+        index_data = json.load(f)
+
+    weight_map = index_data["weight_map"]
+    files_to_process = sorted(list(set(weight_map.values())))
+
+    print(f"📦 Found {len(files_to_process)} shards. Processing one by one...")
+
+    # 2. 순차 변환
+    for i, filename in enumerate(files_to_process):
+        print(f"\n[{i + 1}/{len(files_to_process)}] Processing {filename}...")
+
+        file_path = os.path.join(args.src_path, filename)
+        pt_weights = load_pt_file(file_path)
+
+        mlx_shard = {}
+
+        for k, v in pt_weights.items():
+            # 🔥 [수정] BF16 텐서 -> Float32 변환 -> Numpy -> MLX BF16
+            # PyTorch BF16은 바로 numpy()가 안되므로 .float() (즉 float32)로 바꾼 뒤 넘겨야 함
+            if isinstance(v, torch.Tensor):
+                val_np = v.float().numpy()
+            else:
+                val_np = v
+
+            # MLX에서 다시 BF16으로 저장 (용량 절약)
+            val_mx = mx.array(val_np).astype(mx.bfloat16)
+
+            mlx_shard[k] = val_mx
+
+        save_path = os.path.join(args.dest_path, filename)
+        mx.save_safetensors(save_path, mlx_shard)
+        print(f"   ✅ Saved to {save_path}")
+
+        del pt_weights
+        del mlx_shard
+        if hasattr(mx, "clear_cache"): mx.clear_cache()
+
+    # 3. Config 복사
+    print("\n📑 Copying Config and Index files...")
+
+    config_src = os.path.join(args.src_path, "config.json")
     if os.path.exists(config_src):
-        with open(config_src, "r") as f:
-            config = json.load(f)
+        with open(config_src, "r") as f: config = json.load(f)
+        with open(os.path.join(args.dest_path, "config.json"), "w") as f: json.dump(config, f, indent=4)
 
-        with open(os.path.join(dest_path, "config.json"), "w") as f:
-            json.dump(config, f, indent=4)
-        print(f"✅ Config Loaded: Hidden={config['hidden_size']}, HeadDim={config['head_dim']}")
-    else:
-        print("❌ config.json not found in source path.")
-        return
+    # Index 복사
+    with open(os.path.join(args.dest_path, "model.safetensors.index.json"), "w") as f:
+        json.dump(index_data, f, indent=4)
 
-    print("📥 Loading PyTorch Model...")
-    try:
-        pt_model = AutoModel.from_pretrained(src_path, trust_remote_code=True, local_files_only=True)
-    except Exception as e:
-        print(f"❌ Failed to load PyTorch model: {e}")
-        return
-
-    print("🏗️ Building MLX Model...")
-    mlx_model = TextEncoderMLX(config)
-
-    print("🔄 Converting Weights & Mapping Keys...")
-    pt_state_dict = pt_model.state_dict()
-    mlx_weights = {}
-
-    for k, v in pt_state_dict.items():
-        val = v.detach().cpu().numpy().astype(np.float32)
-
-        # Linear Transpose 제거 (1:1 매핑)
-
-        new_key = k
-        if not k.startswith("model."):
-            new_key = f"model.{k}"
-
-        mlx_weights[new_key] = mx.array(val)
-
-    try:
-        mlx_model.load_weights(list(mlx_weights.items()))
-        print("✅ Weights Loaded Successfully.")
-    except Exception as e:
-        print(f"❌ Error loading weights: {e}")
-        return
-
-    print("🔨 Quantizing to 4-bit (Group Size: 32)...")
-    nn.quantize(mlx_model, bits=4, group_size=32)
-
-    save_file = os.path.join(dest_path, "model.safetensors")
-    print(f"💾 Saving to {save_file}...")
-
-    # [수정] 안전한 저장 로직: tree_flatten을 사용하여 확실하게 평탄화
-    # dict(mlx_model.parameters()) 대신 아래 방식을 사용하면 bad_cast 방지 가능
-    weights = dict(mlx.utils.tree_flatten(mlx_model.parameters()))
-
-    mx.save_safetensors(save_file, weights)
-
-    print("🎉 Conversion Complete!")
+    print("\n🎉 Conversion Complete! (Sharded)")
 
 
 if __name__ == "__main__":
