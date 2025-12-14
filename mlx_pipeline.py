@@ -70,7 +70,6 @@ class MLXFlowMatchEulerScheduler:
         self.timesteps = None
 
     def set_timesteps(self, num_inference_steps: int, mu: float = None):
-
         ts = np.linspace(1.0, 0.0, num_inference_steps + 1)
 
         # Time Shifting
@@ -97,6 +96,7 @@ class MLXFlowMatchEulerScheduler:
 
         return prev_sample
 
+
 # =========================================
 # Main Pipeline Class
 # =========================================
@@ -114,7 +114,7 @@ class ZImagePipeline:
             snapshot_download(repo_id=self.repo_id, local_dir=self.model_path)
 
     def generate(self, prompt, width=1024, height=1024, steps=9, seed=42, lora_path=None, lora_scale=1.0):
-        mx.metal.set_cache_limit(0)
+        mx.set_cache_limit(0)
 
         print(f"Pipeline Started | Size: {width}x{height} | Steps: {steps}")
         global_start = time.time()
@@ -243,18 +243,25 @@ class ZImagePipeline:
 
             print(f"   Step {i + 1}/{steps}: {time.time() - step_start:.2f}s")
 
-        del model
         print(f"   Avg Speed: {(time.time() - denoise_start) / steps:.2f} s/it")
 
         # ----------------------------------------------------------------
-        # [Phase 4] Decoding
+        # [Phase 4] Decoding (VAE with Tiling & Memory Cleanup)
         # ----------------------------------------------------------------
         print("[Phase 4] Decoding...", end=" ", flush=True)
         t_dec = time.time()
 
+        del model, scheduler, step_fn, cos_cached, sin_cached
+        for _ in range(3):
+            mx.clear_cache()
+            gc.collect()
+
         vae_path = os.path.join(self.model_path, "vae")
         device = "mps" if torch.backends.mps.is_available() else "cpu"
+
         vae = AutoencoderKL.from_pretrained(vae_path).to(device)
+
+        vae.enable_tiling()
 
         latents_pt = torch.from_numpy(np.array(latents.astype(mx.float32))).to(device)
         latents_pt = (latents_pt / vae.config.scaling_factor) + getattr(vae.config, "shift_factor", 0.0)
