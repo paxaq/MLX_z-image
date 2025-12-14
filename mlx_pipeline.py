@@ -8,12 +8,13 @@ import time
 import gc
 from PIL import Image
 from transformers import AutoTokenizer
-from diffusers import AutoencoderKL, FlowMatchEulerDiscreteScheduler
+from diffusers import AutoencoderKL
 from huggingface_hub import snapshot_download
 
 from mlx_z_image import ZImageTransformerMLX
 from mlx_text_encoder import TextEncoderMLX
 from lora_utils import apply_lora
+
 
 def create_coordinate_grid(size, start):
     d0, d1, d2 = size
@@ -56,6 +57,45 @@ def load_sharded_weights(model_path):
             for f in files:
                 weights.update(mx.load(f))
     return weights
+
+
+# =========================================
+# MLX Scheduler
+# =========================================
+
+class MLXFlowMatchEulerScheduler:
+    def __init__(self, shift: float = 3.0, use_dynamic_shifting: bool = True):
+        self.shift = shift
+        self.use_dynamic_shifting = use_dynamic_shifting
+        self.timesteps = None
+
+    def set_timesteps(self, num_inference_steps: int, mu: float = None):
+
+        ts = np.linspace(1.0, 0.0, num_inference_steps + 1)
+
+        # Time Shifting
+        if self.use_dynamic_shifting and mu is not None:
+            ts = self._time_shift(mu, ts)
+
+        self.timesteps = mx.array(ts).astype(mx.float32)
+
+    def _time_shift(self, mu: float, t: np.ndarray):
+        mask = t > 0
+        res = np.zeros_like(t)
+
+        res[mask] = np.exp(mu) / (np.exp(mu) + (1 / t[mask] - 1))
+
+        return res
+
+    def step(self, model_output, timestep_idx, sample):
+        t_curr = self.timesteps[timestep_idx]
+        t_prev = self.timesteps[timestep_idx + 1]
+
+        dt = t_prev - t_curr
+
+        prev_sample = sample + dt * model_output
+
+        return prev_sample
 
 
 # =========================================
@@ -131,9 +171,8 @@ class ZImagePipeline:
             config = json.load(f)
 
         model = ZImageTransformerMLX(config)
-        nn.quantize(model, bits=4, group_size=32)  # 메모리 절약 핵심
+        nn.quantize(model, bits=4, group_size=32)
         model.load_weights(os.path.join(trans_path, "model.safetensors"))
-
 
         # ----------------------------------------------------------------
         # [Phase 2.5] Apply lora
@@ -143,25 +182,27 @@ class ZImagePipeline:
             model = apply_lora(model, lora_path, scale=lora_scale)
             print("Done")
 
-
         model.eval()
         print(f"Done ({time.time() - t_start:.2f}s)")
 
         # ----------------------------------------------------------------
-        # [Phase 3] Denoising
+        # [Phase 3] Denoising (Fully MLX)
         # ----------------------------------------------------------------
-        print(f"[Phase 3] Denoising...", end="\n")
+        print(f"[Phase 3] Denoising (MLX Scheduler)...", end="\n")
 
-        # Scheduler
-        sched_path = os.path.join(self.model_path, "scheduler")
-        try:
-            scheduler = FlowMatchEulerDiscreteScheduler.from_pretrained(sched_path)
-        except:
-            scheduler = FlowMatchEulerDiscreteScheduler(shift=3.0, use_dynamic_shifting=True)
+        # 1. MLX Scheduler 초기화
+        scheduler = MLXFlowMatchEulerScheduler(shift=3.0, use_dynamic_shifting=True)
 
-        # Latents
-        latents = torch.randn((1, 16, height // 8, width // 8), generator=torch.Generator().manual_seed(seed),
-                              dtype=torch.float32)
+        # 2. Latents 생성 (바로 MLX Array로 생성하여 불필요한 변환 방지)
+        latents_np = np.random.randn(1, 16, height // 8, width // 8).astype(np.float32)
+        # Seed 고정을 원한다면 numpy seed 설정 필요
+        if seed is not None:
+            np.random.seed(seed)
+            latents_np = np.random.randn(1, 16, height // 8, width // 8).astype(np.float32)
+
+        latents = mx.array(latents_np).astype(mx.bfloat16)
+
+        # 3. Scheduler 세팅
         mu = calculate_shift((latents.shape[2] // 2) * (latents.shape[3] // 2))
         scheduler.set_timesteps(steps, mu=mu)
 
@@ -177,26 +218,36 @@ class ZImagePipeline:
         @mx.compile
         def step_fn(x, t, feats, i_pos, c_pos):
             B, C, H, W = x.shape
-            x = x.reshape(C, 1, 1, H_tok, 2, W_tok, 2).transpose(1, 2, 3, 5, 4, 6, 0).reshape(1, -1, C * 4)
-            out = model(x, t, feats, i_pos, c_pos, cap_mask=None)
-            return -out.reshape(1, 1, H_tok, W_tok, 2, 2, C).transpose(6, 0, 1, 2, 4, 3, 5).reshape(1, C, H, W)
+            # Reshape logic
+            x_reshaped = x.reshape(C, 1, 1, H_tok, 2, W_tok, 2).transpose(1, 2, 3, 5, 4, 6, 0).reshape(1, -1, C * 4)
 
-        # Loop
+            # Model Forward
+            out = model(x_reshaped, t, feats, i_pos, c_pos, cap_mask=None)
+
+            # Unpatchify
+            noise_pred = -out.reshape(1, 1, H_tok, W_tok, 2, 2, C).transpose(6, 0, 1, 2, 4, 3, 5).reshape(1, C, H, W)
+            return noise_pred
+
+        # Loop (No CPU-GPU Copy)
         denoise_start = time.time()
-        for i, t in enumerate(scheduler.timesteps):
+
+        # scheduler.timesteps는 이미 MLX Array이므로 변환 불필요
+        for i in range(steps):
             step_start = time.time()
 
-            latents_mx = mx.array(latents.numpy()).astype(mx.bfloat16)
-            t_mx = mx.array([(1000.0 - t.item()) / 1000.0], dtype=mx.bfloat16)
+            t_curr = scheduler.timesteps[i]
 
-            noise_mx = step_fn(latents_mx, t_mx, cap_feats_mx, img_pos, cap_pos)
-            mx.eval(noise_mx)
+            # 모델 입력용 시간 임베딩 계산 (Flow Matching 표준: 1.0 - t)
+            t_input = (1.0 - t_curr)[None].astype(mx.bfloat16)
 
-            noise_pt = torch.from_numpy(np.array(noise_mx.astype(mx.float32)))
-            latents = scheduler.step(noise_pt, t, latents, return_dict=False)[0]
+            # 1. 모델 예측 (MLX)
+            noise_pred = step_fn(latents, t_input, cap_feats_mx, img_pos, cap_pos)
 
-            mx.clear_cache()
-            gc.collect()
+            # 2. 스케줄러 업데이트 (MLX) - 데이터 복사 없이 바로 계산
+            latents = scheduler.step(noise_pred, i, latents)
+
+            # 3. 동기화 (타이밍 측정을 위해 eval)
+            mx.eval(latents)
 
             print(f"   Step {i + 1}/{steps}: {time.time() - step_start:.2f}s")
 
@@ -210,14 +261,17 @@ class ZImagePipeline:
         t_dec = time.time()
 
         vae_path = os.path.join(self.model_path, "vae")
+        # VAE는 Torch 유지 (복잡한 변환이 많아 포팅 번거로움, 딱 1번만 실행되므로 성능 영향 적음)
         device = "mps" if torch.backends.mps.is_available() else "cpu"
         vae = AutoencoderKL.from_pretrained(vae_path).to(device)
 
-        latents = latents.to(device)
-        latents = (latents / vae.config.scaling_factor) + getattr(vae.config, "shift_factor", 0.0)
+        # MLX -> Torch 변환 (전체 파이프라인 중 딱 1번 수행)
+        latents_pt = torch.from_numpy(np.array(latents.astype(mx.float32))).to(device)
+
+        latents_pt = (latents_pt / vae.config.scaling_factor) + getattr(vae.config, "shift_factor", 0.0)
 
         with torch.no_grad():
-            image = vae.decode(latents).sample
+            image = vae.decode(latents_pt).sample
 
         image = (image / 2 + 0.5).clamp(0, 1).cpu().permute(0, 2, 3, 1).numpy()
         pil_image = Image.fromarray((image[0] * 255).round().astype("uint8"))

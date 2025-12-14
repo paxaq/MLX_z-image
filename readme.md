@@ -124,9 +124,9 @@ We are actively working on making this implementation pure MLX and bug-free.
   - [ ] **Full MLX Pipeline**: Port the remaining PyTorch components (VAE, Text Encoder, Tokenizer, Scheduler) to native MLX to remove the `torch` and `diffusers` dependencies completely.
     - [x] Text Encoder
     - [ ] Tokenizer
-    - [ ] Scheduler
+    - [x] Scheduler
     - [x] Transformer
-    - [x] VAE (converting to **CoreML** is now working on)
+    - [ ] VAE (converting to **CoreML** is now working on)
   - [x] **LoRA Support**: Add support for loading and applying LoRA adapters for style customization.
   - [x] **ComfyUI Node**: Add custom node for ComfyUI GUI.
 
