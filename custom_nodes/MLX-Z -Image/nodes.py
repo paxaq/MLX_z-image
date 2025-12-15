@@ -1,44 +1,45 @@
-import sys
-import os
 import torch
 import numpy as np
-from PIL import Image
+import os
+import sys
+import traceback
 
-# Set project path based on current file location
-MLX_PROJECT_PATH = os.path.dirname(os.path.abspath(__file__))
+current_node_path = os.path.dirname(os.path.abspath(__file__))
+if current_node_path not in sys.path:
+    sys.path.append(current_node_path)
 
-if MLX_PROJECT_PATH not in sys.path:
-    sys.path.append(MLX_PROJECT_PATH)
-
+ZImagePipeline = None
 try:
     from mlx_pipeline import ZImagePipeline
-except ImportError:
-    print(f"Error: mlx_pipeline.py not found. Path: {MLX_PROJECT_PATH}")
-    ZImagePipeline = None
+
+    print("MLX Pipeline loaded successfully in nodes.py")
+except Exception as e:
+    print("\n" + "=" * 50)
+    print("[CRITICAL ERROR] MLX Pipeline Import Failed")
+    print("아래 에러 메시지를 확인하세요:")
+    print("-" * 20)
+    traceback.print_exc()
+    print("=" * 50 + "\n")
 
 
-class MLX_Z_Image_Generator:
+class MLX_Z_Image_Gen:
     def __init__(self):
-        self.pipeline = None
+        pass
 
     @classmethod
     def INPUT_TYPES(s):
-        # Scan lora folder for files
-        lora_dir = os.path.join(MLX_PROJECT_PATH, "lora")
-        lora_files = ["None"]
-
-        if os.path.exists(lora_dir):
-            found_files = [f for f in os.listdir(lora_dir) if f.endswith(".safetensors")]
-            lora_files += sorted(found_files)
-
         return {
             "required": {
-                "prompt": ("STRING", {"multiline": True, "default": "8k, anime style, highly detailed..."}),
+                "prompt": ("STRING", {"multiline": True, "default": "A cinematic shot of a futuristic city"}),
+                "width": ("INT", {"default": 720, "min": 256, "max": 2048, "step": 64}),
+                "height": ("INT", {"default": 720, "min": 256, "max": 2048, "step": 64}),
                 "steps": ("INT", {"default": 9, "min": 1, "max": 50}),
-                "width": ("INT", {"default": 720, "step": 16}),
-                "height": ("INT", {"default": 1024, "step": 16}),
-                "seed": ("INT", {"default": 42, "min": 0, "max": 0xffffffffffffffff}),
-                "lora_name": (lora_files,),
+                "seed": ("INT", {"default": 0, "min": 0, "max": 0xffffffffffffffff}),
+            },
+            "optional": {
+                "lora_name": (
+                    ["None"] + [f for f in os.listdir("models/loras") if f.endswith(".safetensors")] if os.path.exists(
+                        "models/loras") else ["None"],),
                 "lora_strength": ("FLOAT", {"default": 1.0, "min": 0.0, "max": 5.0, "step": 0.1}),
             }
         }
@@ -46,35 +47,36 @@ class MLX_Z_Image_Generator:
     RETURN_TYPES = ("IMAGE",)
     RETURN_NAMES = ("image",)
     FUNCTION = "generate_image"
-    CATEGORY = "MLX/Generation"
+    CATEGORY = "MLX_Z_Image"
 
-    def generate_image(self, prompt, steps, width, height, seed, lora_name, lora_strength):
+    def generate_image(self, prompt, width, height, steps, seed, lora_name="None", lora_strength=1.0):
         if ZImagePipeline is None:
-            raise ImportError("MLX Pipeline load failed.")
+            raise ImportError("MLX Pipeline이 로드되지 않았습니다. ComfyUI 콘솔(터미널)의 빨간색 에러 로그를 확인해주세요.")
 
-        # 1. Initialize pipeline (only once)
-        if self.pipeline is None:
-            print(f"Initializing MLX Pipeline in {MLX_PROJECT_PATH}...")
-            base_model = os.path.join(MLX_PROJECT_PATH, "Z-Image-Turbo-MLX")
-            te_path = os.path.join(base_model, "text_encoder")
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        model_path = os.path.join(current_dir, "Z-Image-Turbo-MLX")
+        text_encoder_path = os.path.join(model_path, "text_encoder")
 
-            self.pipeline = ZImagePipeline(
-                model_path=base_model,
-                text_encoder_path=te_path
-            )
+        if not os.path.exists(model_path):
+            print(f"Warning: Model folder not found at {model_path}")
 
-        # 2. Handle lora path
         lora_path = None
         if lora_name != "None":
-            full_path = os.path.join(MLX_PROJECT_PATH, "lora", lora_name)
-            if os.path.exists(full_path):
-                lora_path = full_path
-                print(f"   Selected lora: {lora_name} (Strength: {lora_strength})")
-            else:
-                print(f"   Warning: lora file not found: {full_path}")
+            base_path = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+            lora_path = os.path.join(base_path, "models", "loras", lora_name)
+            if not os.path.exists(lora_path):
+                print(f"Warning: LoRA not found at {lora_path}")
+                lora_path = None
 
-        # 3. Generate image with MLX
-        pil_image = self.pipeline.generate(
+        print(f"Generating: {prompt} | Size: {width}x{height} | Steps: {steps}")
+        print(f"Loading Model from: {model_path}")
+
+        pipeline = ZImagePipeline(
+            model_path=model_path,
+            text_encoder_path=text_encoder_path
+        )
+
+        pil_image = pipeline.generate(
             prompt=prompt,
             width=width,
             height=height,
@@ -84,7 +86,6 @@ class MLX_Z_Image_Generator:
             lora_scale=lora_strength
         )
 
-        # 4. Convert to ComfyUI format
         image_np = np.array(pil_image).astype(np.float32) / 255.0
         image_tensor = torch.from_numpy(image_np)[None,]
 
@@ -92,7 +93,7 @@ class MLX_Z_Image_Generator:
 
 
 NODE_CLASS_MAPPINGS = {
-    "MLX_Z_Image_Gen": MLX_Z_Image_Generator
+    "MLX_Z_Image_Gen": MLX_Z_Image_Gen
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
