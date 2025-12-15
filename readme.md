@@ -32,6 +32,7 @@ Inference tests were conducted on Apple Silicon devices using **native MLX** wit
 | Device     | RAM  | Total Time | Denoise Time | Time per Step |
 |:-----------|:-----|:-----------|:-------------|:--------------|
 | **M3 Pro** | 18GB | ~ 150 s    | 140 s        | 15 s/Step     |
+| **M4**     | 16GB | ~ 240 s    | 230 s        | 25 s/Step     |
 
 
 ### Gallary
@@ -39,10 +40,9 @@ Uncurated samples generated directly on a Mac using the 4-bit quantized model.
 
 *"semi-realistic anime style female warrior, detailed armor, backlighting, dynamic pose, illustration, highly detailed, dramatic lighting"*
 
-|               **MLX**               |              **Pytorch**               |
-|:-----------------------------------:|:--------------------------------------:|
-| <img src="img/res.png" width="512"> | <img src="img/res_OG.png" width="512"> |
-
+|               **MLX**               |
+|:-----------------------------------:|
+| <img src="img/res.png" width="512"> | 
 
 
 ## Installation
