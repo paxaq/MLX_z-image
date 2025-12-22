@@ -7,7 +7,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run Z-Image MLX Pipeline")
     parser.add_argument("--output", type=str, default="res.png")
     parser.add_argument("--steps", type=int, default=9)
-    parser.add_argument("--seed", type=int, default=12)
+    parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--height", type=int, default=1024)
     parser.add_argument("--width", type=int, default=1024)
     parser.add_argument("--lora", type=str, default=None)
