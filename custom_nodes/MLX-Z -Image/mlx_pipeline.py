@@ -100,7 +100,6 @@ class MLXFlowMatchEulerScheduler:
 # =========================================
 # Main Pipeline Class
 # =========================================
-
 class ZImagePipeline:
     def __init__(self,
                  model_path="Z-Image-Turbo-MLX",
